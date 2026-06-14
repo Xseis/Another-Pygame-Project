@@ -57,7 +57,74 @@ class PhysicsObjectClass(ObjectClass):
             return
         chunks = self.grid.query(self)
         collision_objects = self.grid.get_objects(chunks) - set([self])
+        for obj in collision_objects:
+            is_colliding, normal, depth = self.SeparatingAxisTheorem(self, obj)
+            if is_colliding and normal and depth:
+                mtv = (normal[0]*depth, normal[1]*depth)
+                self.x -= mtv[0]
+                self.y -= mtv[1]
+                self.vx *= normal[0] * 0.3
+                self.vy *= normal[1] * 0.3
+    
+    def SeparatingAxisTheorem(self, obj1:"PhysicsObjectClass", obj2:"PhysicsObjectClass"):
+        obj1_corners = obj1.get_corners()
+        obj2_corners = obj2.get_corners()
+        axes = []
+
+        # Get axes
+        for corners in (obj1_corners, obj2_corners):
+            for i in range(4):
+                c1 = corners[i]
+                c2 = corners[(i+1) % 4]
+
+                edge_x = c2[0] - c1[0]
+                edge_y = c2[1] - c1[1]
+                axis_x = -edge_y
+                axis_y = edge_x
+
+                length = math.hypot(axis_x, axis_y)
+                axis_x /= length
+                axis_y /= length
+
+                axes.append((axis_x, axis_y))
+
+        smallest_overlap = float("inf")
+
+        for axis_x, axis_y in axes:
+            min_a = max_a = obj1_corners[0][0] * axis_x + obj1_corners[0][1] * axis_y
+            for x, y in obj1_corners[1:]:
+                proj = x * axis_x + y * axis_y
+                min_a = min(min_a, proj)
+                max_a = max(max_a, proj)
+            min_b = max_b = obj2_corners[0][0] * axis_x + obj2_corners[0][1] * axis_y
+            for x, y in obj2_corners[1:]:
+                proj = x * axis_x + y * axis_y
+                min_b = min(min_b, proj)
+                max_b = max(max_b, proj)
+
+            overlap = min(max_a, max_b) - max(min_a, min_b)
+            if overlap <= 0:
+                return False, None, 0
+            if overlap < smallest_overlap:
+                smallest_overlap = overlap
+                smallest_axis = (axis_x, axis_y)
         
+        # Centers
+        center_a = (
+            sum(x for x, y in obj1_corners) / len(obj1_corners),
+            sum(y for x, y in obj1_corners) / len(obj1_corners)
+        )
+        center_b = (
+            sum(x for x, y in obj2_corners) / len(obj2_corners),
+            sum(y for x, y in obj2_corners) / len(obj2_corners)
+        )
+        dir_x = center_b[0] - center_a[0]
+        dir_y = center_b[1] - center_a[1]
+
+        if dir_x * smallest_axis[0] + dir_y * smallest_axis[1] < 0:
+            smallest_axis = (-smallest_axis[0], -smallest_axis[1])
+
+        return True, smallest_axis, smallest_overlap
         
     def tick(self, dt):
         if self.is_static:
@@ -71,8 +138,11 @@ class PhysicsObjectClass(ObjectClass):
         if old_x != self.x or old_y != self.y: # If position changed
             self.grid.update_chunks(self)
 
-        # Collision check
-        self.resolve_collision() 
+        # Collision check 
+        # SAT (Separating Axis Theorem) also pushes objects away from each other
+        # when a collision occurs.
+        if self.can_collide:
+            self.resolve_collision() 
 
         # Drag
         self.vx *= self.drag ** dt
@@ -278,8 +348,8 @@ class GameClass:
                     dx, dy = x-gridw//2, y-gridh//2
                     pygame.draw.rect(self.win, (50, 255, 90), (self.WIDTH/2+dx*self.grid.grid_size*self.camera.zoom-(self.camera.x%(self.grid.grid_size)*self.camera.zoom),
                                                         self.HEIGHT/2+dy*self.grid.grid_size*self.camera.zoom-(self.camera.y%(self.grid.grid_size)*self.camera.zoom), 
-                                                        self.grid.grid_size*self.camera.zoom, 
-                                                        self.grid.grid_size*self.camera.zoom), 1)
+                                                        self.grid.grid_size*self.camera.zoom+1, 
+                                                        self.grid.grid_size*self.camera.zoom+1), 1)
             for obj in self.objects:
                 corners = [self.camera.cam_space(dx, dy) for dx, dy in obj.get_corners()]
                 pygame.draw.polygon(self.win, (255, 0, 0), corners)
