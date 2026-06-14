@@ -7,7 +7,7 @@ I will sadly not be finishing this unless someone paypals me 6 billion dollars. 
 - [ ] Set up project structure
 - [ ] Collision
 - [ ] Write documentation (not happening)
-- [X] Map
+- [ ] Map
 
 # LATER GOALS
 
