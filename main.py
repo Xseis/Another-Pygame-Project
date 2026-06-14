@@ -258,14 +258,22 @@ class CameraClass(PhysicsObjectClass):
         self.zoom = 0.5
         self.game = game
     
+    @classmethod
+    def lerp_angle(cls, a, b, t):
+        diff = (b - a + math.pi) % (2 * math.pi) - math.pi
+        return a + diff * t
+    
     def follow(self):
         if not self.target:
             return
         self.x = self.target.x
         self.y = self.target.y
+        #self.angle = self.lerp_angle(self.angle, self.target.angle+math.radians(90), 0.1)
     
     def cam_space(self, x, y):
-        return (x-self.x)*self.zoom+self.game.WIDTH/2, (y-self.y)*self.zoom+self.game.HEIGHT/2
+        nx, ny = (x-self.x)*self.zoom, (y-self.y)*self.zoom
+        rx, ry = nx * math.cos(-self.angle) - ny * math.sin(-self.angle), nx * math.sin(-self.angle) + ny * math.cos(-self.angle)
+        return rx+self.game.WIDTH/2, ry+self.game.HEIGHT/2
 
 
 class GridClass:
