@@ -326,8 +326,8 @@ class GameClass:
         self.camera.target = self.cat
 
         self.objects:list[ObjectClass] = [self.cat, self.wall] # PURELY DRAWING/VISUAL
-        for i in range(100):
-            wall= PhysicsObjectClass(i*100, 0, 0, 0, 0, grid=self.grid, width=100, length=100)
+        for i in range(10):
+            wall= PhysicsObjectClass(i*200, 0, 0, 0, 0, grid=self.grid, width=100, length=100)
             self.objects.append(wall)
 
         self.WIDTH, self.HEIGHT = 1000, 600
@@ -396,7 +396,8 @@ class GameClass:
 
 
             pygame.display.flip()
-            dt = self.clock.tick(60) / 1000
+            dt = self.clock.tick() / 1000
+            pygame.display.set_caption(f"FPS: {int(self.clock.get_fps())}")
         pygame.quit()
 
 GameClass().Run()
