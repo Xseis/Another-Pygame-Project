@@ -63,9 +63,12 @@ class PhysicsObjectClass(ObjectClass):
                 mtv = (normal[0]*depth, normal[1]*depth)
                 self.x -= mtv[0]
                 self.y -= mtv[1]
-                self.vx *= normal[0] * 0.3
-                self.vy *= normal[1] * 0.3
-    
+
+                impact = self.vx*normal[0] + self.vy*normal[1]
+                if impact > 0:
+                    self.vx -= normal[0] * impact*1.1
+                    self.vy -= normal[1] * impact*1.1
+        
     def SeparatingAxisTheorem(self, obj1:"PhysicsObjectClass", obj2:"PhysicsObjectClass"):
         obj1_corners = obj1.get_corners()
         obj2_corners = obj2.get_corners()
@@ -316,13 +319,16 @@ class GameClass:
     def __init__(self) -> None:
         self.grid = GridClass(grid_size=500)
         self.cat = CatClass(x=400.0, y=400.0, angle=0.0, mass=10.0, inertia=1.0, grid=self.grid, width=100, length=160)
-        self.wall = PhysicsObjectClass(0, 0, 0, 0, 0, grid=self.grid, width=10, length=10)
+        self.wall = PhysicsObjectClass(0, 0, 0, 0, 0, grid=self.grid, width=100, length=100)
         self.wall.is_static = True
 
         self.camera = CameraClass(0, 0, 0, self)
         self.camera.target = self.cat
 
         self.objects:list[ObjectClass] = [self.cat, self.wall] # PURELY DRAWING/VISUAL
+        for i in range(100):
+            wall= PhysicsObjectClass(i*100, 0, 0, 0, 0, grid=self.grid, width=100, length=100)
+            self.objects.append(wall)
 
         self.WIDTH, self.HEIGHT = 1000, 600
         self.win = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
@@ -336,13 +342,18 @@ class GameClass:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                if event.type == pygame.MOUSEWHEEL:
+                    self.camera.zoom *= 1.1 if event.y == 1 else 0.9
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_z:
+                        self.camera.zoom = 1
 
             self.cat.Update(dt)
             self.camera.follow()
             
             self.win.fill((255, 255, 255))
-            gridw = int(self.WIDTH/self.camera.zoom//self.grid.grid_size+3)
-            gridh = int(self.HEIGHT/self.camera.zoom//self.grid.grid_size+3)
+            gridw = min(int(self.WIDTH/self.camera.zoom//self.grid.grid_size+3), 100)
+            gridh = min(int(self.HEIGHT/self.camera.zoom//self.grid.grid_size+3), 100)
             for x in range(gridw):
                 for y in range(gridh):
                     dx, dy = x-gridw//2, y-gridh//2
@@ -377,6 +388,13 @@ class GameClass:
             pygame.draw.arc(self.win, (0,0,0), (center[0]-90, center[1]-90, 180, 180), 0, math.radians(360), 4)
             font = pygame.font.Font(None, 40)
             self.win.blit(font.render(f"{int(kmh)}km/h", True, (0,0,0)), (center[0]-50, center[1]+40))
+
+            # Coords
+            font = pygame.font.Font(None, 20)
+            self.win.blit(font.render(f"x: {int(self.camera.x/100)}m", True, (0,0,0), (220,220,220)), (10, self.HEIGHT-50))
+            self.win.blit(font.render(f"y: {int(self.camera.y/100)}m", True, (0,0,0), (220,220,220)), (10, self.HEIGHT-30))
+
+
             pygame.display.flip()
             dt = self.clock.tick(60) / 1000
         pygame.quit()
