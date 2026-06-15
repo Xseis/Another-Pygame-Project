@@ -1,14 +1,17 @@
 import pygame
 import math
-pygame.init()
+pygame.font.init()
+pygame.mixer.init()
 
 class ObjectClass:
-    def __init__(self, x:float, y:float, length:float=1, width:float=1) -> None:
+    def __init__(self, x:float, y:float, game:"GameClass", length:float=1, width:float=1) -> None:
         self.x = x
         self.y = y
         
         self.length = length
         self.width = width
+
+        self.game = game
     
     def get_corners(self) -> list[tuple[float, float]]:
         """Returns the 4 corners of a non-rotated rectangle"""
@@ -25,8 +28,8 @@ class ObjectClass:
         return (min_x, min_y, max_x-min_x, max_y-min_y)
 
 class PhysicsObjectClass(ObjectClass):
-    def __init__(self, x:float, y:float, angle:float, mass:float, inertia:float, grid:"GridClass", length:float=1, width:float=1, is_static:bool=False, can_collide:bool=True) -> None:
-        super().__init__(x, y, length, width)
+    def __init__(self, x:float, y:float, angle:float, mass:float, inertia:float, grid:"GridClass", game:"GameClass", length:float=1, width:float=1, is_static:bool=False, can_collide:bool=True, can_touch:bool=True) -> None:
+        super().__init__(x, y, game, length, width)
         self.vx = 0.0
         self.vy = 0.0
         self.angle = angle
@@ -36,14 +39,20 @@ class PhysicsObjectClass(ObjectClass):
         self.inertia = inertia
         self.is_static = is_static
         self.can_collide = can_collide
+        self.can_touch = can_touch
 
         self.drag = 0.4
 
-        # For collision
-        if self.can_collide:
+        # For collision detection
+        if self.can_collide or self.can_touch:
             self.grid = grid
             self.chunks = grid.query(self)
             self.grid.add_object(self)
+    
+    def remove(self):
+        """DELETES the object, this removes it from the grid too"""
+        self.grid.remove_object(self)
+        self.game.objects.remove(self)
     
     def get_corners(self) -> list[tuple[float, float]]:
         """Returns the 4 corners of a rotated rectangle"""
@@ -51,23 +60,33 @@ class PhysicsObjectClass(ObjectClass):
         cos_a, sin_a = math.cos(self.angle), math.sin(self.angle)
         local_corners = [(-hl, -hw), (-hl, hw), (hl, hw), (hl, -hw)]
         return [(self.x + dx*cos_a - dy*sin_a, self.y + dx*sin_a + dy*cos_a) for dx, dy in local_corners] 
+    
+    def collision_event(self, hit):
+        """Overwrite ts"""
+        return hit
 
     def resolve_collision(self):
-        if self.is_static or not self.can_collide:
+        if self.is_static or not self.can_touch:
             return
         chunks = self.grid.query(self)
         collision_objects = self.grid.get_objects(chunks) - set([self])
         for obj in collision_objects:
+            if not obj.can_touch: # If object isnt touchable
+                continue
             is_colliding, normal, depth = self.SeparatingAxisTheorem(self, obj)
+            
             if is_colliding and normal and depth:
-                mtv = (normal[0]*depth, normal[1]*depth)
-                self.x -= mtv[0]
-                self.y -= mtv[1]
+                obj.collision_event(self)
 
-                impact = self.vx*normal[0] + self.vy*normal[1]
-                if impact > 0:
-                    self.vx -= normal[0] * impact*1.1
-                    self.vy -= normal[1] * impact*1.1
+                if self.can_collide and not self.is_static: # ONLY move self if can_collide is on
+                    mtv = (normal[0]*depth, normal[1]*depth)
+                    self.x -= mtv[0]
+                    self.y -= mtv[1]
+
+                    impact = self.vx*normal[0] + self.vy*normal[1]
+                    if impact > 0:
+                        self.vx -= normal[0] * impact*1.1
+                        self.vy -= normal[1] * impact*1.1
         
     def SeparatingAxisTheorem(self, obj1:"PhysicsObjectClass", obj2:"PhysicsObjectClass"):
         obj1_corners = obj1.get_corners()
@@ -144,8 +163,7 @@ class PhysicsObjectClass(ObjectClass):
         # Collision check 
         # SAT (Separating Axis Theorem) also pushes objects away from each other
         # when a collision occurs.
-        if self.can_collide:
-            self.resolve_collision() 
+        self.resolve_collision() 
 
         # Drag
         self.vx *= self.drag ** dt
@@ -155,10 +173,33 @@ class PhysicsObjectClass(ObjectClass):
     @property
     def speed(self):
         return math.hypot(self.vx, self.vy) 
+    
+class KidClass(PhysicsObjectClass):
+    def __init__(self, x: float, y: float, angle: float, grid: "GridClass", game:"GameClass") -> None:
+        super().__init__(x, y, angle, mass=1, inertia=1, grid=grid, game=game, length=50, width=50, is_static=False, can_collide=False, can_touch=True)
+        self.hp = 100
+    
+    @property
+    def is_alive(self):
+        return self.hp > 0
+    
+    def collision_event(self, hit):
+        hit = super().collision_event(hit)
+        if isinstance(hit, CatClass):
+            self.hp = 0
+            if not self.is_alive:
+                self.kill()
+        else:
+            print("Kid fucking walked in a wall")
+        
+    def kill(self):
+        self.remove()
+        pygame.mixer.Sound("KidScream5.wav").play()
+
 
 class CatClass(PhysicsObjectClass):
-    def __init__(self, x:float, y:float, angle:float, mass:float, inertia:float, grid:"GridClass", length:float=2, width:float=1) -> None:
-        super().__init__(x, y, angle, mass, inertia, grid, length, width)
+    def __init__(self, x:float, y:float, angle:float, mass:float, inertia:float, grid:"GridClass", game:"GameClass", length:float=2, width:float=1) -> None:
+        super().__init__(x, y, angle, mass, inertia, grid, game, length, width)
 
         # Controls
         self.gas = 0   # 0..1
@@ -166,7 +207,7 @@ class CatClass(PhysicsObjectClass):
         self.turn = 0  # -1..1
         
         self.max_turn = math.radians(45)
-        self.engine_force = 20000
+        self.engine_force = 25000
         self.default_drag = 0.2
         self.handbreak = False
         self.handbreak_duration = 0 # Used to slow turn
@@ -202,6 +243,10 @@ class CatClass(PhysicsObjectClass):
                 self.drag = 0.3
                 self.gas *= 0.8
         else: self.drag = self.default_drag
+    
+    def collision_event(self, hit):
+        self.goodslip = False
+        return super().collision_event(hit)
 
     def Update(self, dt):
         self.Controls(dt)
@@ -253,10 +298,9 @@ class CatClass(PhysicsObjectClass):
 
 class CameraClass(PhysicsObjectClass):
     def __init__(self, x:float, y:float, angle:float, game:"GameClass") -> None:
-        super().__init__(x, y, angle, mass=0, inertia=0, grid=game.grid, is_static=True, can_collide=False)
+        super().__init__(x, y, angle, mass=0, inertia=0, grid=game.grid, game=game, is_static=True, can_collide=False, can_touch=False)
         self.target:PhysicsObjectClass | None = None
         self.zoom = 0.5
-        self.game = game
     
     @classmethod
     def lerp_angle(cls, a, b, t):
@@ -302,6 +346,13 @@ class GridClass:
             else: 
                 self.grid[chunk] = set([obj])
     
+    def remove_object(self, obj:PhysicsObjectClass):
+        chunks = obj.chunks
+        for chunk in chunks:
+            self.grid[chunk].discard(obj)
+            if not self.grid[chunk]: # Delete the chunk if no objects are inside
+                del self.grid[chunk] # because it cleans up memory :3
+    
     def get_objects(self, grids:list[tuple[int, int]]) -> set[PhysicsObjectClass]:
         objects = set()
         for chunk in grids:
@@ -326,8 +377,8 @@ class GridClass:
 class GameClass:
     def __init__(self) -> None:
         self.grid = GridClass(grid_size=500)
-        self.cat = CatClass(x=400.0, y=400.0, angle=0.0, mass=10.0, inertia=1.0, grid=self.grid, width=100, length=160)
-        self.wall = PhysicsObjectClass(0, 0, 0, 0, 0, grid=self.grid, width=100, length=100)
+        self.cat = CatClass(x=400.0, y=400.0, angle=0.0, mass=10.0, inertia=1.0, grid=self.grid, game=self, width=100, length=160)
+        self.wall = PhysicsObjectClass(0, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100)
         self.wall.is_static = True
 
         self.camera = CameraClass(0, 0, 0, self)
@@ -335,8 +386,10 @@ class GameClass:
 
         self.objects:list[ObjectClass] = [self.cat, self.wall] # PURELY DRAWING/VISUAL
         for i in range(10):
-            wall= PhysicsObjectClass(i*200, 0, 0, 0, 0, grid=self.grid, width=100, length=100)
+            wall= PhysicsObjectClass(i*200, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100, is_static=True)
             self.objects.append(wall)
+
+        self.objects.append(KidClass(140, 20, 3, self.grid, game=self))
 
         self.WIDTH, self.HEIGHT = 1000, 600
         self.win = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
@@ -370,14 +423,16 @@ class GameClass:
                                                         self.grid.grid_size*self.camera.zoom+1, 
                                                         self.grid.grid_size*self.camera.zoom+1), 1)
             for obj in self.objects:
+                if isinstance(obj, PhysicsObjectClass):
+                    obj.tick(dt)
                 corners = [self.camera.cam_space(dx, dy) for dx, dy in obj.get_corners()]
                 pygame.draw.polygon(self.win, (255, 0, 0), corners)
-            # CAR AABB
+            # CAT AABB
             aabb = self.cat.get_aabb()
             screen_pos = self.camera.cam_space(aabb[0], aabb[1])
             pygame.draw.rect(self.win, (80,0,0), (*screen_pos, aabb[2]*self.camera.zoom, aabb[3]*self.camera.zoom), 1)
 
-            # CAR DIRECTION
+            # CAT DIRECTION
             if self.cat.speed > 0:
                 angle = math.atan2(self.cat.vy, self.cat.vx)
             else:
