@@ -1,0 +1,13 @@
+scripts/
+├─ core/
+│  ├─ Game.py
+│  └─ Camera.py
+├─ entities/
+│  ├─ Player.py
+│  └─ Cat.py
+├─ physics/
+│  └─ PhysicsObject.py
+└─ world/
+   └─ Grid.py
+
+or sumtin
