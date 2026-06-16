@@ -64,8 +64,7 @@ class PhysicsObjectClass(ObjectClass):
     
     def remove(self):
         """DELETES the object, this removes it from the grid too"""
-        self.grid.remove_object(self)
-        self.game.objects.remove(self)
+        self.game.objects_to_delete.append(self)
     
     def collide_z(self, obj:"PhysicsObjectClass"):
         self_min = self.z
@@ -433,6 +432,7 @@ class GameClass:
     def __init__(self) -> None:
         self.grid = GridClass(grid_size=500)
         self.objects:list[ObjectClass] = [] # PURELY DRAWING/VISUAL
+        self.objects_to_delete:list[PhysicsObjectClass] = []
 
         self.WIDTH, self.HEIGHT = 1000, 600
         pygame.display.init()
@@ -530,9 +530,9 @@ class GameClass:
         self.tex.use(location=self.tex_location)
         self.prog = prog  # keep a reference so you can update the uniform per-frame
 
-        self.max_objects = 2000
+        self.max_objects = 10000
         verts_per_obj = 4
-        self.vbo = self.ctx.buffer(reserve=self.max_objects * verts_per_obj * 40)
+        self.vbo = self.ctx.buffer(reserve=self.max_objects * verts_per_obj * 40*2)
 
         indices = []
         for i in range(self.max_objects):
@@ -548,9 +548,8 @@ class GameClass:
         self.camera = CameraClass(0, 0, 0, self)
         self.camera.target = self.cat
 
-        for i in range(1000):
+        for i in range(100):
             wall= PhysicsObjectClass(i*200, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100, is_static=True)
-
             wall.z = i/10
             wall.__setattr__("atlas_coords", (0,3))
             wall.stack_layers=8
@@ -588,6 +587,13 @@ class GameClass:
                                                         # self.HEIGHT/2+dy*self.grid.grid_size*self.camera.zoom-(self.camera.y%(self.grid.grid_size)*self.camera.zoom), 
                                                         # self.grid.grid_size*self.camera.zoom+1, 
                                                         # self.grid.grid_size*self.camera.zoom+1), 1)
+            # DELETION OF OBJECTS            
+            for obj in self.objects_to_delete:
+                if obj in self.objects:
+                    self.objects.remove(obj)
+                    self.grid.remove_object(obj)
+            self.objects_to_delete.clear()
+
             # RENDERING
             self.ctx.clear(1.0, 1.0, 1.0, 1.0, depth=1.0)
             all_verts = []
@@ -638,7 +644,7 @@ class GameClass:
             ]).astype('f4')
             self.vbo.write(combined.tobytes())
             self.prog['layer_height'].value = self.LAYER_WORLD_HEIGHT * self.camera.zoom
-            self.vao.render(moderngl.TRIANGLES, vertices=len(self.objects) * 6, instances=self.MAX_STACK_LAYERS)
+            self.vao.render(moderngl.TRIANGLES, vertices=len(self.objects) * 6 *self.MAX_STACK_LAYERS, instances=self.MAX_STACK_LAYERS)
                 #pygame.draw.polygon(self.win, (255, 0, 0), corners)
             # CAT AABB
             # aabb = self.cat.get_aabb()
