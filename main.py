@@ -187,7 +187,7 @@ class KidClass(PhysicsObjectClass):
     def __init__(self, x: float, y: float, angle: float, grid: "GridClass", game:"GameClass") -> None:
         super().__init__(x, y, angle, mass=1, inertia=1, grid=grid, game=game, length=50, width=50, is_static=False, can_collide=False, can_touch=True)
         self.hp = 100
-        self.stack_layers = 5
+        self.stack_layers = 7
     
     @property
     def is_alive(self):
@@ -320,7 +320,7 @@ class CameraClass(PhysicsObjectClass):
             return
         self.x = self.target.x
         self.y = self.target.y
-        self.angle = self.lerp_angle(self.angle, self.target.angle+math.radians(90), 0.1)
+        self.angle = self.lerp_angle(self.angle, self.target.angle+math.radians(90), 0.04)
     
     def cam_space(self, x, y):
         nx, ny = (x-self.x)*self.zoom, (y-self.y)*self.zoom
@@ -516,34 +516,34 @@ class GameClass:
             self.vao.render(moderngl.TRIANGLES, vertices=len(self.objects) * 6, instances=self.MAX_STACK_LAYERS)
                 #pygame.draw.polygon(self.win, (255, 0, 0), corners)
             # CAT AABB
-            aabb = self.cat.get_aabb()
-            screen_pos = self.camera.cam_space(aabb[0], aabb[1])
+            # aabb = self.cat.get_aabb()
+            # screen_pos = self.camera.cam_space(aabb[0], aabb[1])
             #pygame.draw.rect(self.win, (80,0,0), (*screen_pos, aabb[2]*self.camera.zoom, aabb[3]*self.camera.zoom), 1)
 
             # CAT DIRECTION
-            if self.cat.speed > 0:
-                angle = math.atan2(self.cat.vy, self.cat.vx)
-            else:
-                angle = self.cat.angle
+            # if self.cat.speed > 0:
+            #     angle = math.atan2(self.cat.vy, self.cat.vx)
+            # else:
+            #     angle = self.cat.angle
             #pygame.draw.line(self.win, (80,0,0), self.camera.cam_space(self.cat.x, self.cat.y), self.camera.cam_space(self.cat.x+math.cos(angle)*70, self.cat.y+math.sin(angle)*70))
             #pygame.draw.line(self.win, (80,0,0), self.camera.cam_space(self.cat.x, self.cat.y), self.camera.cam_space(self.cat.x+math.cos(self.cat.angle)*100, self.cat.y+math.sin(self.cat.angle)*100))
             
             # SPEEDOMETER
-            center = (self.WIDTH-100, self.HEIGHT-100)
-            kmh = self.cat.speed/100*3.6
-            angle = math.radians(180)
-            angle += math.radians(kmh/80*180)
+            # center = (self.WIDTH-100, self.HEIGHT-100)
+            # kmh = self.cat.speed/100*3.6
+            # angle = math.radians(180)
+            # angle += math.radians(kmh/80*180)
             #pygame.draw.line(self.win, (0,0,0), center, 
                             # (center[0]+math.cos(angle)*80, center[1]+math.sin(angle)*80),
                             # 4)
             #pygame.draw.arc(self.win, (0,0,0), (center[0]-90, center[1]-90, 180, 180), 0, math.radians(360), 4)
-            font = pygame.font.Font(None, 40)
-            self.win.blit(font.render(f"{int(kmh)}km/h", True, (0,0,0)), (center[0]-50, center[1]+40))
+            # font = pygame.font.Font(None, 40)
+            # self.win.blit(font.render(f"{int(kmh)}km/h", True, (0,0,0)), (center[0]-50, center[1]+40))
 
-            # Coords
-            font = pygame.font.Font(None, 20)
-            self.win.blit(font.render(f"x: {int(self.camera.x/100)}m", True, (0,0,0), (220,220,220)), (10, self.HEIGHT-50))
-            self.win.blit(font.render(f"y: {int(self.camera.y/100)}m", True, (0,0,0), (220,220,220)), (10, self.HEIGHT-30))
+            # # Coords
+            # font = pygame.font.Font(None, 20)
+            # self.win.blit(font.render(f"x: {int(self.camera.x/100)}m", True, (0,0,0), (220,220,220)), (10, self.HEIGHT-50))
+            # self.win.blit(font.render(f"y: {int(self.camera.y/100)}m", True, (0,0,0), (220,220,220)), (10, self.HEIGHT-30))
 
 
             pygame.display.flip()
