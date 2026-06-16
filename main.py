@@ -107,7 +107,6 @@ class PhysicsObjectClass(ObjectClass):
             
             if is_colliding and normal and depth:
                 overlap, direction = self.collide_z(obj)
-                print(overlap)
                 self.collision_event(obj)
                 obj.collision_event(self)
 
@@ -271,14 +270,7 @@ class CatClass(PhysicsObjectClass):
         # Visual
         self.stack_layers = 8
         self.cast_shadow = True
-        self.image = pygame.image.load("RedCar.png").convert_alpha()
-        self.tex = self.game.ctx.texture(
-            self.image.get_size(),
-            4,
-            pygame.image.tobytes(self.image, "RGBA", True)
-        )
-        self.tex.build_mipmaps()
-        self.tex.use(location=0)
+        self.atlas_coords = (0, 2)
     
     def Controls(self, dt):
         keys = pygame.key.get_pressed()
@@ -451,18 +443,26 @@ class GameClass:
         # OPENGL
         self.ctx = moderngl.create_context()
         self.ctx.enable(moderngl.DEPTH_TEST | moderngl.BLEND)
+        self.ctx.blend_func = (moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA)
+        
         vertex_shader = '''
         #version 330
+
+        uniform vec2 screen_size;
+        uniform float layer_height;
+
         in vec2 in_pos;
         in float in_layers;
         in float in_z;
-        in vec4 in_col;
-        uniform vec2 screen_size;
-        uniform float layer_height;
+        in vec2 in_uv;
+        in vec2 in_atlas_coords;
+
         flat out int v_instance;
         flat out int v_layers;
         flat out int v_z;
-        flat out vec4 v_col;
+        out vec2 v_uv;
+        out vec2 v_atlas_coords;
+
         void main() {
             vec2 pos = in_pos;
             float z = in_z;
@@ -475,19 +475,20 @@ class GameClass:
             v_instance = int(gl_InstanceID);
             v_layers = int(in_layers);
             v_z = int(z);
-            v_col = in_col;
+            v_uv = in_uv;
+            v_atlas_coords = in_atlas_coords;
         }
         '''
 
         fragment_shader = '''
         #version 330
 
-        uniform float side_shade;
+        uniform sampler2D tex;
 
         flat in int v_instance;
         flat in int v_layers;
-        flat in vec4 v_col;
         in vec2 v_uv;
+        in vec2 v_atlas_coords;
 
         out vec4 frag_color;
 
@@ -495,25 +496,43 @@ class GameClass:
             if (v_instance >= v_layers) {
                 discard; // this object doesn't have this many v_layers
             }
-            vec3 col = v_col.rgb;
-            float alpha = v_col.a;
-            bool is_top = (v_instance == 0);
-            vec3 final_color = is_top ? col : col*0.7-(col * side_shade * v_instance/v_layers);
-            frag_color = vec4(final_color, alpha);
+
+            float frame_w = 1.0 / 8;
+            float frame_h = 1.0 / 4;
+
+            vec2 uv = v_uv;
+            vec2 atlas = v_atlas_coords;
+
+            uv.x = atlas.x*frame_w + uv.x*frame_w + 1 - v_instance*frame_w -frame_w;
+            uv.y = -atlas.y*frame_h + uv.y*frame_h - 1*frame_h;
+
+            vec4 tex_color = texture(tex, uv);
+            if (tex_color.a == 0.0) {
+                discard;
+            }
+            frag_color = tex_color;
         }
         '''
 
         self.MAX_STACK_LAYERS = 40
-        self.LAYER_WORLD_HEIGHT = 5.0  # how "tall" each layer is in world units, tune to taste
+        self.LAYER_WORLD_HEIGHT = 6.7 # how "tall" each layer is in world units, tune to taste
         
         prog = self.ctx.program(vertex_shader=vertex_shader, fragment_shader=fragment_shader)
         prog['screen_size'].value = (self.WIDTH, self.HEIGHT)
-        prog['side_shade'].value = 0.7  # tweak to taste; lower = darker/more dramatic
+        self.texture_atlas = pygame.image.load("atlas.png").convert_alpha()
+        self.tex = self.ctx.texture(
+            self.texture_atlas.get_size(),
+            4,
+            pygame.image.tobytes(self.texture_atlas, "RGBA", True)
+        )
+        self.tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self.tex_location = 0
+        self.tex.use(location=self.tex_location)
         self.prog = prog  # keep a reference so you can update the uniform per-frame
 
         self.max_objects = 2000
         verts_per_obj = 4
-        self.vbo = self.ctx.buffer(reserve=self.max_objects * verts_per_obj * 2 * 4 * 4)
+        self.vbo = self.ctx.buffer(reserve=self.max_objects * verts_per_obj * 40)
 
         indices = []
         for i in range(self.max_objects):
@@ -522,26 +541,25 @@ class GameClass:
         indices = np.array(indices, dtype='i4')
         self.ibo = self.ctx.buffer(indices.tobytes())
 
-        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f 1f 1f 4f', 'in_pos', 'in_layers', 'in_z', 'in_col')], index_buffer=self.ibo)
+        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f 1f 1f 2f 2f', 'in_pos', 'in_layers', 'in_z', 'in_uv', 'in_atlas_coords')], index_buffer=self.ibo)
 
-        self.cat = CatClass(x=400.0, y=400.0, angle=0.0, mass=10.0, inertia=1.0, grid=self.grid, game=self, width=100, length=160)
-        self.wall = PhysicsObjectClass(0, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100)
-        self.wall.is_static = True
+        self.cat = CatClass(x=400.0, y=400.0, angle=0.0, mass=10.0, inertia=1.0, grid=self.grid, game=self, width=80, length=180)
 
         self.camera = CameraClass(0, 0, 0, self)
         self.camera.target = self.cat
 
         for i in range(1000):
             wall= PhysicsObjectClass(i*200, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100, is_static=True)
-        wall = PhysicsObjectClass(100, 10, 0, 0, 0, grid=self.grid, game=self, width=100, length=100, is_static=True)
-        wall.z = 100
-        wall.cast_shadow = True
+
+            wall.z = i/10
+            wall.__setattr__("atlas_coords", (0,3))
+            wall.stack_layers=8
 
         import random
         for i in range(100):
-            KidClass(random.randint(0, 5000), random.randint(0, 5000), math.radians(random.randint(0, 360)), self.grid, game=self)
-                
-    
+            kid = KidClass(random.randint(0, 5000), random.randint(0, 5000), math.radians(random.randint(0, 360)), self.grid, game=self)
+            kid.__setattr__("atlas_coords", (0,3))
+              
     def Run(self):
         self.running = True
         dt = 0
@@ -575,35 +593,48 @@ class GameClass:
             all_verts = []
             all_layers = []
             all_z = []
-            all_colors = []
+            all_uv = []
+            all_atlas = []
             for obj in self.objects:
-                if isinstance(obj, PhysicsObjectClass):
+                if isinstance(obj, PhysicsObjectClass): # Update all physics objects
                     obj.tick(dt)
                 corners = [self.camera.cam_space(dx, dy) for dx, dy in obj.get_corners()]
                 layers = getattr(obj, 'stack_layers', 1)
                 z = getattr(obj, 'z', 0)
-                for corner in corners:
+                atlas = getattr(obj, 'atlas_coords', (0,0))
+                for i, corner in enumerate(corners):
                     all_verts.append(corner)
                     all_layers.append(layers)
                     all_z.append(z)
-                    all_colors.append((1.0, 0.0, 0.0, 1.0))
+                    if i == 0:
+                        all_uv.append((0, 0))
+                    elif i == 1:
+                        all_uv.append((0, 1))
+                    elif i == 2:
+                        all_uv.append((1, 1))
+                    elif i == 3:
+                        all_uv.append((1, 0))
+                    all_atlas.append(atlas)
 
                 if obj.cast_shadow:
                     for corner in corners:
                         all_verts.append(corner)
                         all_layers.append(1)
                         all_z.append(1-layers)
-                        all_colors.append((0.0, 0.0, 0.0, 0.3))
+                        all_uv.append((0.2, 0.0))
+                        all_atlas.append((1,0))
 
             pos_arr = np.array(all_verts, dtype='f4')
             layers_arr = np.array(all_layers, dtype='f4').reshape(-1, 1)
             z_arr = np.array(all_z, dtype='f4').reshape(-1, 1)
-            color_arr = np.array(all_colors, dtype='f4')
+            uv_arr = np.array(all_uv, dtype='f4')
+            atlas_arr = np.array(all_atlas, dtype='f4')
             combined = np.column_stack([
                 pos_arr,
                 layers_arr,
                 z_arr,
-                color_arr
+                uv_arr,
+                atlas_arr
             ]).astype('f4')
             self.vbo.write(combined.tobytes())
             self.prog['layer_height'].value = self.LAYER_WORLD_HEIGHT * self.camera.zoom
