@@ -1,7 +1,9 @@
 import pygame
-import math
 pygame.font.init()
 pygame.mixer.init()
+import math
+import moderngl
+import numpy as np
 
 class ObjectClass:
     def __init__(self, x:float, y:float, game:"GameClass", length:float=1, width:float=1) -> None:
@@ -43,11 +45,18 @@ class PhysicsObjectClass(ObjectClass):
 
         self.drag = 0.4
 
+        # VISUALS
+        self.stack_layers = 10
+
+        self.game.objects.append(self)
+
         # For collision detection
         if self.can_collide or self.can_touch:
             self.grid = grid
             self.chunks = grid.query(self)
             self.grid.add_object(self)
+            
+            self.resolve_collision() 
     
     def remove(self):
         """DELETES the object, this removes it from the grid too"""
@@ -76,9 +85,10 @@ class PhysicsObjectClass(ObjectClass):
             is_colliding, normal, depth = self.SeparatingAxisTheorem(self, obj)
             
             if is_colliding and normal and depth:
+                self.collision_event(obj)
                 obj.collision_event(self)
 
-                if self.can_collide and not self.is_static: # ONLY move self if can_collide is on
+                if self.can_collide and obj.can_collide and not self.is_static: # ONLY move self if can_collide is on
                     mtv = (normal[0]*depth, normal[1]*depth)
                     self.x -= mtv[0]
                     self.y -= mtv[1]
@@ -159,11 +169,10 @@ class PhysicsObjectClass(ObjectClass):
         # Update collision chunks / grid
         if old_x != self.x or old_y != self.y: # If position changed
             self.grid.update_chunks(self)
-
-        # Collision check 
-        # SAT (Separating Axis Theorem) also pushes objects away from each other
-        # when a collision occurs.
-        self.resolve_collision() 
+             # Collision check 
+            # SAT (Separating Axis Theorem) also pushes objects away from each other
+            # when a collision occurs.
+            self.resolve_collision() 
 
         # Drag
         self.vx *= self.drag ** dt
@@ -178,6 +187,7 @@ class KidClass(PhysicsObjectClass):
     def __init__(self, x: float, y: float, angle: float, grid: "GridClass", game:"GameClass") -> None:
         super().__init__(x, y, angle, mass=1, inertia=1, grid=grid, game=game, length=50, width=50, is_static=False, can_collide=False, can_touch=True)
         self.hp = 100
+        self.stack_layers = 5
     
     @property
     def is_alive(self):
@@ -189,8 +199,6 @@ class KidClass(PhysicsObjectClass):
             self.hp = 0
             if not self.is_alive:
                 self.kill()
-        else:
-            print("Kid fucking walked in a wall")
         
     def kill(self):
         self.remove()
@@ -217,6 +225,8 @@ class CatClass(PhysicsObjectClass):
         self.goodslip_boost_timer = 0.0
         self.goodslip_boost_duration = 0.5 # sec
         self.goodslip_boost_multiplier = 2
+
+        self.stack_layers = 7
     
     def Controls(self, dt):
         keys = pygame.key.get_pressed()
@@ -294,8 +304,6 @@ class CatClass(PhysicsObjectClass):
         steer_response = 10.0
         self.angular_vel += (target_angular_vel - self.angular_vel) * (steer_response / self.inertia) * dt
 
-        super().tick(dt)
-
 class CameraClass(PhysicsObjectClass):
     def __init__(self, x:float, y:float, angle:float, game:"GameClass") -> None:
         super().__init__(x, y, angle, mass=0, inertia=0, grid=game.grid, game=game, is_static=True, can_collide=False, can_touch=False)
@@ -312,7 +320,7 @@ class CameraClass(PhysicsObjectClass):
             return
         self.x = self.target.x
         self.y = self.target.y
-        #self.angle = self.lerp_angle(self.angle, self.target.angle+math.radians(90), 0.1)
+        self.angle = self.lerp_angle(self.angle, self.target.angle+math.radians(90), 0.1)
     
     def cam_space(self, x, y):
         nx, ny = (x-self.x)*self.zoom, (y-self.y)*self.zoom
@@ -377,6 +385,8 @@ class GridClass:
 class GameClass:
     def __init__(self) -> None:
         self.grid = GridClass(grid_size=500)
+        self.objects:list[ObjectClass] = [] # PURELY DRAWING/VISUAL
+
         self.cat = CatClass(x=400.0, y=400.0, angle=0.0, mass=10.0, inertia=1.0, grid=self.grid, game=self, width=100, length=160)
         self.wall = PhysicsObjectClass(0, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100)
         self.wall.is_static = True
@@ -384,16 +394,78 @@ class GameClass:
         self.camera = CameraClass(0, 0, 0, self)
         self.camera.target = self.cat
 
-        self.objects:list[ObjectClass] = [self.cat, self.wall] # PURELY DRAWING/VISUAL
-        for i in range(10):
+        for i in range(1000):
             wall= PhysicsObjectClass(i*200, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100, is_static=True)
-            self.objects.append(wall)
 
-        self.objects.append(KidClass(140, 20, 3, self.grid, game=self))
+        import random
+        for i in range(100):
+            KidClass(random.randint(0, 1000), random.randint(0, 1000), math.radians(random.randint(0, 360)), self.grid, game=self)
 
         self.WIDTH, self.HEIGHT = 1000, 600
-        self.win = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
+        self.win = pygame.display.set_mode((self.WIDTH, self.HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
         self.clock = pygame.time.Clock()
+
+        # OPENGL
+        self.ctx = moderngl.create_context()
+        vertex_shader = '''
+        #version 330
+        in vec2 in_pos;
+        in float in_layers;
+        uniform vec2 screen_size;
+        uniform float layer_height;
+        flat out int v_instance;
+        flat out int v_layers;
+        void main() {
+            vec2 pos = in_pos;
+            pos.y -= float(gl_InstanceID) * layer_height;
+            vec2 ndc = (pos / screen_size) * 2.0 - 1.0;
+            ndc.y = -ndc.y;
+            gl_Position = vec4(ndc, 0.0, 1.0);
+            v_instance = gl_InstanceID;
+            v_layers = int(in_layers);
+        }
+        '''
+
+        fragment_shader = '''
+        #version 330
+        uniform vec3 color;
+        uniform float side_shade;
+        flat in int v_instance;
+        flat in int v_layers;
+        out vec4 frag_color;
+        void main() {
+            if (v_instance >= v_layers) {
+                discard; // this object doesn't have this many layers
+            }
+            bool is_top = (v_instance == v_layers - 1);
+            vec3 final_color = is_top ? color : color * side_shade;
+            frag_color = vec4(final_color, 1.0);
+        }
+        '''
+
+        self.MAX_STACK_LAYERS = 40
+        self.STACK_LAYERS = 10
+        self.LAYER_WORLD_HEIGHT = 7.0  # how "tall" each layer is in world units, tune to taste
+        
+        prog = self.ctx.program(vertex_shader=vertex_shader, fragment_shader=fragment_shader)
+        prog['screen_size'].value = (self.WIDTH, self.HEIGHT)
+        prog['color'].value = (1.0, 0.0, 0.0)
+        prog['side_shade'].value = 0.7  # tweak to taste; lower = darker/more dramatic
+        self.prog = prog  # keep a reference so you can update the uniform per-frame
+
+        self.max_objects = 2000
+        verts_per_obj = 4
+        self.vbo = self.ctx.buffer(reserve=self.max_objects * verts_per_obj * 2 * 4)
+
+        indices = []
+        for i in range(self.max_objects):
+            base = i * 4
+            indices += [base, base+1, base+2, base, base+2, base+3]
+        indices = np.array(indices, dtype='i4')
+        self.ibo = self.ctx.buffer(indices.tobytes())
+
+        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f 1f', 'in_pos', 'in_layers')], index_buffer=self.ibo)
+                
     
     def Run(self):
         self.running = True
@@ -413,42 +485,58 @@ class GameClass:
             self.camera.follow()
             
             self.win.fill((255, 255, 255))
+            self.ctx.clear(1.0, 1.0, 1.0)
             gridw = min(int(self.WIDTH/self.camera.zoom//self.grid.grid_size+3), 100)
             gridh = min(int(self.HEIGHT/self.camera.zoom//self.grid.grid_size+3), 100)
             for x in range(gridw):
                 for y in range(gridh):
                     dx, dy = x-gridw//2, y-gridh//2
-                    pygame.draw.rect(self.win, (50, 255, 90), (self.WIDTH/2+dx*self.grid.grid_size*self.camera.zoom-(self.camera.x%(self.grid.grid_size)*self.camera.zoom),
-                                                        self.HEIGHT/2+dy*self.grid.grid_size*self.camera.zoom-(self.camera.y%(self.grid.grid_size)*self.camera.zoom), 
-                                                        self.grid.grid_size*self.camera.zoom+1, 
-                                                        self.grid.grid_size*self.camera.zoom+1), 1)
+                    #pygame.draw.rect(self.win, (50, 255, 90), (self.WIDTH/2+dx*self.grid.grid_size*self.camera.zoom-(self.camera.x%(self.grid.grid_size)*self.camera.zoom),
+                                                        # self.HEIGHT/2+dy*self.grid.grid_size*self.camera.zoom-(self.camera.y%(self.grid.grid_size)*self.camera.zoom), 
+                                                        # self.grid.grid_size*self.camera.zoom+1, 
+                                                        # self.grid.grid_size*self.camera.zoom+1), 1)
+            # each frame
+            all_verts = []
+            all_layers = []
             for obj in self.objects:
                 if isinstance(obj, PhysicsObjectClass):
                     obj.tick(dt)
                 corners = [self.camera.cam_space(dx, dy) for dx, dy in obj.get_corners()]
-                pygame.draw.polygon(self.win, (255, 0, 0), corners)
+                layers = getattr(obj, 'stack_layers', self.STACK_LAYERS)
+                for corner in corners:
+                    all_verts.append(corner)
+                    all_layers.append(layers)
+
+            pos_arr = np.array(all_verts, dtype='f4')
+            layers_arr = np.array(all_layers, dtype='f4').reshape(-1, 1)
+            combined = np.hstack([pos_arr, layers_arr])
+            self.vbo.write(combined.tobytes())
+
+            self.prog['layer_height'].value = self.LAYER_WORLD_HEIGHT * self.camera.zoom
+            self.vao.render(moderngl.TRIANGLES, vertices=len(self.objects) * 6, instances=self.MAX_STACK_LAYERS)
+                #pygame.draw.polygon(self.win, (255, 0, 0), corners)
             # CAT AABB
             aabb = self.cat.get_aabb()
             screen_pos = self.camera.cam_space(aabb[0], aabb[1])
-            pygame.draw.rect(self.win, (80,0,0), (*screen_pos, aabb[2]*self.camera.zoom, aabb[3]*self.camera.zoom), 1)
+            #pygame.draw.rect(self.win, (80,0,0), (*screen_pos, aabb[2]*self.camera.zoom, aabb[3]*self.camera.zoom), 1)
 
             # CAT DIRECTION
             if self.cat.speed > 0:
                 angle = math.atan2(self.cat.vy, self.cat.vx)
             else:
                 angle = self.cat.angle
-            pygame.draw.line(self.win, (80,0,0), self.camera.cam_space(self.cat.x, self.cat.y), self.camera.cam_space(self.cat.x+math.cos(angle)*70, self.cat.y+math.sin(angle)*70))
-            pygame.draw.line(self.win, (80,0,0), self.camera.cam_space(self.cat.x, self.cat.y), self.camera.cam_space(self.cat.x+math.cos(self.cat.angle)*100, self.cat.y+math.sin(self.cat.angle)*100))
+            #pygame.draw.line(self.win, (80,0,0), self.camera.cam_space(self.cat.x, self.cat.y), self.camera.cam_space(self.cat.x+math.cos(angle)*70, self.cat.y+math.sin(angle)*70))
+            #pygame.draw.line(self.win, (80,0,0), self.camera.cam_space(self.cat.x, self.cat.y), self.camera.cam_space(self.cat.x+math.cos(self.cat.angle)*100, self.cat.y+math.sin(self.cat.angle)*100))
             
             # SPEEDOMETER
             center = (self.WIDTH-100, self.HEIGHT-100)
             kmh = self.cat.speed/100*3.6
             angle = math.radians(180)
             angle += math.radians(kmh/80*180)
-            pygame.draw.line(self.win, (0,0,0), center, 
-                            (center[0]+math.cos(angle)*80, center[1]+math.sin(angle)*80),
-                            4)
-            pygame.draw.arc(self.win, (0,0,0), (center[0]-90, center[1]-90, 180, 180), 0, math.radians(360), 4)
+            #pygame.draw.line(self.win, (0,0,0), center, 
+                            # (center[0]+math.cos(angle)*80, center[1]+math.sin(angle)*80),
+                            # 4)
+            #pygame.draw.arc(self.win, (0,0,0), (center[0]-90, center[1]-90, 180, 180), 0, math.radians(360), 4)
             font = pygame.font.Font(None, 40)
             self.win.blit(font.render(f"{int(kmh)}km/h", True, (0,0,0)), (center[0]-50, center[1]+40))
 
