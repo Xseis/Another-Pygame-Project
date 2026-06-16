@@ -1,6 +1,7 @@
 import pygame
 pygame.font.init()
 pygame.mixer.init()
+pygame.display.init()
 import math
 import moderngl
 import numpy as np
@@ -9,11 +10,16 @@ class ObjectClass:
     def __init__(self, x:float, y:float, game:"GameClass", length:float=1, width:float=1) -> None:
         self.x = x
         self.y = y
+        self.z = 0.0
         
         self.length = length
         self.width = width
 
         self.game = game
+
+        # VISUALS
+        self.stack_layers = 10
+        self.cast_shadow = False
     
     def get_corners(self) -> list[tuple[float, float]]:
         """Returns the 4 corners of a non-rotated rectangle"""
@@ -34,6 +40,7 @@ class PhysicsObjectClass(ObjectClass):
         super().__init__(x, y, game, length, width)
         self.vx = 0.0
         self.vy = 0.0
+        self.vz = 0.0
         self.angle = angle
         self.angular_vel = 0.0
 
@@ -44,9 +51,6 @@ class PhysicsObjectClass(ObjectClass):
         self.can_touch = can_touch
 
         self.drag = 0.4
-
-        # VISUALS
-        self.stack_layers = 10
 
         self.game.objects.append(self)
 
@@ -62,6 +66,23 @@ class PhysicsObjectClass(ObjectClass):
         """DELETES the object, this removes it from the grid too"""
         self.grid.remove_object(self)
         self.game.objects.remove(self)
+    
+    def collide_z(self, obj:"PhysicsObjectClass"):
+        self_min = self.z
+        self_max = self.z + self.stack_layers
+
+        obj_min = obj.z
+        obj_max = obj.z + obj.stack_layers
+        
+        overlap = min(self_max, obj_max) - max(self_min, obj_min)
+
+        if overlap <= 0:
+            return 0, 0
+        if (self_min + self_max) / 2 < (obj_min + obj_max) / 2:
+            direction = -1
+        else:
+            direction = 1
+        return overlap, direction
     
     def get_corners(self) -> list[tuple[float, float]]:
         """Returns the 4 corners of a rotated rectangle"""
@@ -85,10 +106,21 @@ class PhysicsObjectClass(ObjectClass):
             is_colliding, normal, depth = self.SeparatingAxisTheorem(self, obj)
             
             if is_colliding and normal and depth:
+                overlap, direction = self.collide_z(obj)
+                print(overlap)
                 self.collision_event(obj)
                 obj.collision_event(self)
 
+                
+
                 if self.can_collide and obj.can_collide and not self.is_static: # ONLY move self if can_collide is on
+                    if 0 < overlap < 1.4: # 1.4 = step height
+                        if self.vz < 0:
+                            self.z += overlap * direction
+                            self.vz = 0
+                        continue
+                    elif 0 >= overlap:
+                        continue
                     mtv = (normal[0]*depth, normal[1]*depth)
                     self.x -= mtv[0]
                     self.y -= mtv[1]
@@ -164,6 +196,7 @@ class PhysicsObjectClass(ObjectClass):
         old_x, old_y = self.x, self.y
         self.x += self.vx * dt
         self.y += self.vy * dt
+        self.z += self.vz * dt
         self.angle += self.angular_vel * dt
 
         # Update collision chunks / grid
@@ -179,15 +212,24 @@ class PhysicsObjectClass(ObjectClass):
         self.vy *= self.drag ** dt
         self.angular_vel *= self.drag ** dt
 
+        # Gravity
+        self.vz -=  10 ** dt
+        if self.z <= 0:
+            self.vz = 0
+            self.z = 0
+
     @property
     def speed(self):
         return math.hypot(self.vx, self.vy) 
     
 class KidClass(PhysicsObjectClass):
     def __init__(self, x: float, y: float, angle: float, grid: "GridClass", game:"GameClass") -> None:
-        super().__init__(x, y, angle, mass=1, inertia=1, grid=grid, game=game, length=50, width=50, is_static=False, can_collide=False, can_touch=True)
         self.hp = 100
         self.stack_layers = 7
+
+        self.sound = pygame.mixer.Sound("KidScream5.wav")
+        self.sound.set_volume(0.01)
+        super().__init__(x, y, angle, mass=1, inertia=1, grid=grid, game=game, length=50, width=50, is_static=False, can_collide=False, can_touch=True)
     
     @property
     def is_alive(self):
@@ -202,7 +244,7 @@ class KidClass(PhysicsObjectClass):
         
     def kill(self):
         self.remove()
-        pygame.mixer.Sound("KidScream5.wav").play()
+        self.sound.play()
 
 
 class CatClass(PhysicsObjectClass):
@@ -226,7 +268,17 @@ class CatClass(PhysicsObjectClass):
         self.goodslip_boost_duration = 0.5 # sec
         self.goodslip_boost_multiplier = 2
 
-        self.stack_layers = 7
+        # Visual
+        self.stack_layers = 8
+        self.cast_shadow = True
+        self.image = pygame.image.load("RedCar.png").convert_alpha()
+        self.tex = self.game.ctx.texture(
+            self.image.get_size(),
+            4,
+            pygame.image.tobytes(self.image, "RGBA", True)
+        )
+        self.tex.build_mipmaps()
+        self.tex.use(location=0)
     
     def Controls(self, dt):
         keys = pygame.key.get_pressed()
@@ -239,7 +291,7 @@ class CatClass(PhysicsObjectClass):
             self.turn -= 1
         if keys[pygame.K_d]:
             self.turn += 1
-        if keys[pygame.K_SPACE]:
+        if keys[pygame.K_LSHIFT]:
             if not self.handbreak:
                 self.angular_vel += self.turn*5
             self.gas = 1 * abs(self.turn)
@@ -248,6 +300,9 @@ class CatClass(PhysicsObjectClass):
         else:
             self.handbreak = False
             self.handbreak_duration = 0
+        if keys[pygame.K_SPACE]:
+            self.vz = 100
+
         if self.handbreak: 
             if self.turn != 0:
                 self.drag = 0.3
@@ -387,6 +442,88 @@ class GameClass:
         self.grid = GridClass(grid_size=500)
         self.objects:list[ObjectClass] = [] # PURELY DRAWING/VISUAL
 
+        self.WIDTH, self.HEIGHT = 1000, 600
+        pygame.display.init()
+        pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
+        self.win = pygame.display.set_mode((self.WIDTH, self.HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
+        self.clock = pygame.time.Clock()
+
+        # OPENGL
+        self.ctx = moderngl.create_context()
+        self.ctx.enable(moderngl.DEPTH_TEST | moderngl.BLEND)
+        vertex_shader = '''
+        #version 330
+        in vec2 in_pos;
+        in float in_layers;
+        in float in_z;
+        in vec4 in_col;
+        uniform vec2 screen_size;
+        uniform float layer_height;
+        flat out int v_instance;
+        flat out int v_layers;
+        flat out int v_z;
+        flat out vec4 v_col;
+        void main() {
+            vec2 pos = in_pos;
+            float z = in_z;
+            pos.y += float(gl_InstanceID) * layer_height - z * layer_height;
+            vec2 ndc = (pos / screen_size) * 2.0 - 1.0;
+            ndc.y = -ndc.y;
+
+            gl_Position = vec4(ndc, -((z+1)*layer_height)*0.001, 1.0);
+
+            v_instance = int(gl_InstanceID);
+            v_layers = int(in_layers);
+            v_z = int(z);
+            v_col = in_col;
+        }
+        '''
+
+        fragment_shader = '''
+        #version 330
+
+        uniform float side_shade;
+
+        flat in int v_instance;
+        flat in int v_layers;
+        flat in vec4 v_col;
+        in vec2 v_uv;
+
+        out vec4 frag_color;
+
+        void main() {
+            if (v_instance >= v_layers) {
+                discard; // this object doesn't have this many v_layers
+            }
+            vec3 col = v_col.rgb;
+            float alpha = v_col.a;
+            bool is_top = (v_instance == 0);
+            vec3 final_color = is_top ? col : col*0.7-(col * side_shade * v_instance/v_layers);
+            frag_color = vec4(final_color, alpha);
+        }
+        '''
+
+        self.MAX_STACK_LAYERS = 40
+        self.LAYER_WORLD_HEIGHT = 5.0  # how "tall" each layer is in world units, tune to taste
+        
+        prog = self.ctx.program(vertex_shader=vertex_shader, fragment_shader=fragment_shader)
+        prog['screen_size'].value = (self.WIDTH, self.HEIGHT)
+        prog['side_shade'].value = 0.7  # tweak to taste; lower = darker/more dramatic
+        self.prog = prog  # keep a reference so you can update the uniform per-frame
+
+        self.max_objects = 2000
+        verts_per_obj = 4
+        self.vbo = self.ctx.buffer(reserve=self.max_objects * verts_per_obj * 2 * 4 * 4)
+
+        indices = []
+        for i in range(self.max_objects):
+            base = i * 4
+            indices += [base, base+1, base+2, base, base+2, base+3]
+        indices = np.array(indices, dtype='i4')
+        self.ibo = self.ctx.buffer(indices.tobytes())
+
+        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f 1f 1f 4f', 'in_pos', 'in_layers', 'in_z', 'in_col')], index_buffer=self.ibo)
+
         self.cat = CatClass(x=400.0, y=400.0, angle=0.0, mass=10.0, inertia=1.0, grid=self.grid, game=self, width=100, length=160)
         self.wall = PhysicsObjectClass(0, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100)
         self.wall.is_static = True
@@ -396,75 +533,13 @@ class GameClass:
 
         for i in range(1000):
             wall= PhysicsObjectClass(i*200, 0, 0, 0, 0, grid=self.grid, game=self, width=100, length=100, is_static=True)
+        wall = PhysicsObjectClass(100, 10, 0, 0, 0, grid=self.grid, game=self, width=100, length=100, is_static=True)
+        wall.z = 100
+        wall.cast_shadow = True
 
         import random
         for i in range(100):
-            KidClass(random.randint(0, 1000), random.randint(0, 1000), math.radians(random.randint(0, 360)), self.grid, game=self)
-
-        self.WIDTH, self.HEIGHT = 1000, 600
-        self.win = pygame.display.set_mode((self.WIDTH, self.HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
-        self.clock = pygame.time.Clock()
-
-        # OPENGL
-        self.ctx = moderngl.create_context()
-        vertex_shader = '''
-        #version 330
-        in vec2 in_pos;
-        in float in_layers;
-        uniform vec2 screen_size;
-        uniform float layer_height;
-        flat out int v_instance;
-        flat out int v_layers;
-        void main() {
-            vec2 pos = in_pos;
-            pos.y -= float(gl_InstanceID) * layer_height;
-            vec2 ndc = (pos / screen_size) * 2.0 - 1.0;
-            ndc.y = -ndc.y;
-            gl_Position = vec4(ndc, 0.0, 1.0);
-            v_instance = gl_InstanceID;
-            v_layers = int(in_layers);
-        }
-        '''
-
-        fragment_shader = '''
-        #version 330
-        uniform vec3 color;
-        uniform float side_shade;
-        flat in int v_instance;
-        flat in int v_layers;
-        out vec4 frag_color;
-        void main() {
-            if (v_instance >= v_layers) {
-                discard; // this object doesn't have this many layers
-            }
-            bool is_top = (v_instance == v_layers - 1);
-            vec3 final_color = is_top ? color : color * side_shade;
-            frag_color = vec4(final_color, 1.0);
-        }
-        '''
-
-        self.MAX_STACK_LAYERS = 40
-        self.STACK_LAYERS = 10
-        self.LAYER_WORLD_HEIGHT = 5.0  # how "tall" each layer is in world units, tune to taste
-        
-        prog = self.ctx.program(vertex_shader=vertex_shader, fragment_shader=fragment_shader)
-        prog['screen_size'].value = (self.WIDTH, self.HEIGHT)
-        prog['color'].value = (1.0, 0.0, 0.0)
-        prog['side_shade'].value = 0.7  # tweak to taste; lower = darker/more dramatic
-        self.prog = prog  # keep a reference so you can update the uniform per-frame
-
-        self.max_objects = 2000
-        verts_per_obj = 4
-        self.vbo = self.ctx.buffer(reserve=self.max_objects * verts_per_obj * 2 * 4)
-
-        indices = []
-        for i in range(self.max_objects):
-            base = i * 4
-            indices += [base, base+1, base+2, base, base+2, base+3]
-        indices = np.array(indices, dtype='i4')
-        self.ibo = self.ctx.buffer(indices.tobytes())
-
-        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f 1f', 'in_pos', 'in_layers')], index_buffer=self.ibo)
+            KidClass(random.randint(0, 5000), random.randint(0, 5000), math.radians(random.randint(0, 360)), self.grid, game=self)
                 
     
     def Run(self):
@@ -484,32 +559,52 @@ class GameClass:
             self.cat.Update(dt)
             self.camera.follow()
             
-            self.win.fill((255, 255, 255))
-            self.ctx.clear(1.0, 1.0, 1.0)
-            gridw = min(int(self.WIDTH/self.camera.zoom//self.grid.grid_size+3), 100)
-            gridh = min(int(self.HEIGHT/self.camera.zoom//self.grid.grid_size+3), 100)
-            for x in range(gridw):
-                for y in range(gridh):
-                    dx, dy = x-gridw//2, y-gridh//2
+            # self.win.fill((255, 255, 255))
+            
+            # gridw = min(int(self.WIDTH/self.camera.zoom//self.grid.grid_size+3), 100)
+            # gridh = min(int(self.HEIGHT/self.camera.zoom//self.grid.grid_size+3), 100)
+            # for x in range(gridw):
+            #     for y in range(gridh):
+            #         dx, dy = x-gridw//2, y-gridh//2
                     #pygame.draw.rect(self.win, (50, 255, 90), (self.WIDTH/2+dx*self.grid.grid_size*self.camera.zoom-(self.camera.x%(self.grid.grid_size)*self.camera.zoom),
                                                         # self.HEIGHT/2+dy*self.grid.grid_size*self.camera.zoom-(self.camera.y%(self.grid.grid_size)*self.camera.zoom), 
                                                         # self.grid.grid_size*self.camera.zoom+1, 
                                                         # self.grid.grid_size*self.camera.zoom+1), 1)
-            # each frame
+            # RENDERING
+            self.ctx.clear(1.0, 1.0, 1.0, 1.0, depth=1.0)
             all_verts = []
             all_layers = []
+            all_z = []
+            all_colors = []
             for obj in self.objects:
                 if isinstance(obj, PhysicsObjectClass):
                     obj.tick(dt)
                 corners = [self.camera.cam_space(dx, dy) for dx, dy in obj.get_corners()]
-                layers = getattr(obj, 'stack_layers', self.STACK_LAYERS)
+                layers = getattr(obj, 'stack_layers', 1)
+                z = getattr(obj, 'z', 0)
                 for corner in corners:
                     all_verts.append(corner)
                     all_layers.append(layers)
+                    all_z.append(z)
+                    all_colors.append((1.0, 0.0, 0.0, 1.0))
+
+                if obj.cast_shadow:
+                    for corner in corners:
+                        all_verts.append(corner)
+                        all_layers.append(1)
+                        all_z.append(1-layers)
+                        all_colors.append((0.0, 0.0, 0.0, 0.3))
 
             pos_arr = np.array(all_verts, dtype='f4')
             layers_arr = np.array(all_layers, dtype='f4').reshape(-1, 1)
-            combined = np.hstack([pos_arr, layers_arr])
+            z_arr = np.array(all_z, dtype='f4').reshape(-1, 1)
+            color_arr = np.array(all_colors, dtype='f4')
+            combined = np.column_stack([
+                pos_arr,
+                layers_arr,
+                z_arr,
+                color_arr
+            ]).astype('f4')
             self.vbo.write(combined.tobytes())
             self.prog['layer_height'].value = self.LAYER_WORLD_HEIGHT * self.camera.zoom
             self.vao.render(moderngl.TRIANGLES, vertices=len(self.objects) * 6, instances=self.MAX_STACK_LAYERS)
