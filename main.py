@@ -445,7 +445,7 @@ class GameClass:
 
         self.MAX_STACK_LAYERS = 40
         self.STACK_LAYERS = 10
-        self.LAYER_WORLD_HEIGHT = 7.0  # how "tall" each layer is in world units, tune to taste
+        self.LAYER_WORLD_HEIGHT = 5.0  # how "tall" each layer is in world units, tune to taste
         
         prog = self.ctx.program(vertex_shader=vertex_shader, fragment_shader=fragment_shader)
         prog['screen_size'].value = (self.WIDTH, self.HEIGHT)
@@ -511,7 +511,6 @@ class GameClass:
             layers_arr = np.array(all_layers, dtype='f4').reshape(-1, 1)
             combined = np.hstack([pos_arr, layers_arr])
             self.vbo.write(combined.tobytes())
-
             self.prog['layer_height'].value = self.LAYER_WORLD_HEIGHT * self.camera.zoom
             self.vao.render(moderngl.TRIANGLES, vertices=len(self.objects) * 6, instances=self.MAX_STACK_LAYERS)
                 #pygame.draw.polygon(self.win, (255, 0, 0), corners)
